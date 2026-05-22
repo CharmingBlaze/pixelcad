@@ -5,6 +5,7 @@ import {
   type WebGLRenderer,
 } from 'three'
 import { ViewportGizmo } from 'three-viewport-gizmo'
+import { viewportGizmoThemeOptions } from './gizmoTheme'
 import type { ViewportInteraction } from './viewports'
 
 export const PERSP_VP_INDEX = 1
@@ -18,6 +19,7 @@ export function createPerspectiveViewportGizmo(
 ) {
   const viewport = new Vector4()
   const gizmo = new ViewportGizmo(camera, renderer, {
+    ...viewportGizmoThemeOptions(),
     container,
     placement: 'bottom-right',
     size: 96,

@@ -190,7 +190,7 @@
         />
         Surface
       </label>
-      <label class="tp-check" title="Stay in the active poly tool after each shape; press Esc to exit">
+      <label class="tp-check" title="Keep drawing into the same mesh after each shape; press Esc to exit">
         <input
           type="checkbox"
           checked={cadState.polyDrawContinuous}

@@ -15,6 +15,10 @@ import type { CadMaterial, FaceSideMode, SelectionVisualState } from './types'
 export const DEFAULT_MATERIAL_ID = 'mat-default'
 export const SELECTED_MATERIAL_ID = 'mat-selected'
 
+/** Object selection tint — matches gizmo active / sub-element selection gold. */
+export const SELECTION_ACCENT = 0xffd64a
+export const SELECTION_EMISSIVE = 0xc9a84a
+
 export const defaultMaterialLibrary: CadMaterial[] = [
   {
     id: DEFAULT_MATERIAL_ID,
@@ -63,17 +67,17 @@ export function materialFromDefinition(
   textureMap?: Texture | null,
 ) {
   const base = new Color(def.color)
-  const color = textureMap ? new Color(0xffffff) : selected ? base.clone().offsetHSL(0, 0, 0.07) : base
-  const emissive = selected ? base.clone().multiplyScalar(0.18) : new Color(0x000000)
+  const color = textureMap ? new Color(0xffffff) : selected ? base.clone().offsetHSL(0, 0, 0.04) : base
+  const emissive = selected ? new Color(SELECTION_EMISSIVE) : new Color(0x000000)
   const specular = selected
-    ? new Color(0x446688)
+    ? new Color(0x665533)
     : new Color(0x111111).lerp(new Color(0xcccccc), def.metalness)
 
   return new MeshPhongMaterial({
     color,
     map: textureMap ?? null,
     emissive,
-    emissiveIntensity: selected ? 0.1 : 0,
+    emissiveIntensity: selected ? 0.08 : 0,
     specular,
     shininess: selected
       ? 35
@@ -97,8 +101,10 @@ export const matDefault = (faceSide: FaceSideMode = 'double') =>
 
 export const matSelected = () =>
   new MeshPhongMaterial({
-    color: 0x44aaff,
-    specular: 0x3366cc,
+    color: 0xe8c96a,
+    emissive: SELECTION_EMISSIVE,
+    emissiveIntensity: 0.08,
+    specular: 0x665533,
     shininess: 40,
     flatShading: true,
   })

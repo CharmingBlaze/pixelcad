@@ -39,8 +39,7 @@ export const SHORTCUTS: ShortcutAction[] = [
   { key: 'Delete', action: 'delete', label: 'Delete' },
   { key: 'x', action: 'delete', label: 'Delete' },
   { key: 'd', ctrl: true, action: 'duplicate', label: 'Duplicate' },
-  { key: 'a', ctrl: true, action: 'selectAll', label: 'Select all' },
-  { key: 'a', alt: true, action: 'deselectAll', label: 'Deselect all' },
+  { key: 'a', action: 'selectToggleAll', label: 'Select / deselect all' },
   { key: 'g', ctrl: true, action: 'selectGrow', label: 'Grow selection' },
   { key: 'i', ctrl: true, action: 'selectInvert', label: 'Invert selection' },
 

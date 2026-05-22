@@ -1,4 +1,4 @@
-import { Mesh, Vector3, type Texture } from 'three'
+import { Mesh, Vector3, type Camera, type Texture } from 'three'
 import type { Scene } from 'three'
 import { geoForType, createPrimitiveInBox, createPolygonGeometry } from './geometry'
 import { getDrawPrimitiveTool } from './drawPrimitiveTool'
@@ -47,7 +47,22 @@ import {
   type InterchangeExportFormat,
 } from './interchange'
 import { deserializeScene, downloadSceneJson, pickSceneFile } from './sceneIO'
+import { FRONT_VP_INDEX, SIDE_VP_INDEX } from './viewports'
 import { beginHistoryAction, bindHistoryHooks, clearHistory } from './history.svelte'
+import {
+  createReferenceImageGeometry,
+  createReferenceImageRoot,
+  disposeReferenceImageObject,
+  isReferenceImage,
+  isReferenceImageMesh,
+  loadReferenceImageAspect,
+  loadReferenceTexture,
+  nextReferenceImageRenderOrder,
+  readFileAsDataUrl,
+  referenceImageNameFromFile,
+  restoreReferenceImageFromUrl,
+  syncReferenceImageMaterial,
+} from './referenceImage'
 import { disposeMeshOutline, setMeshOutlineState } from './outlineSystem'
 import { coplanarFaceGroup, selectableEdges } from './selectionGeometry'
 import type {
@@ -80,9 +95,9 @@ export const cadState = $state({
   activeTool: 'select' as ActiveTool,
   drawPrimitiveType: null as PrimitiveType | null,
   drawPolyMode: null as PolyDrawMode | null,
-  polyDrawSpace: '2d' as PolyDrawSpace,
+  polyDrawSpace: '3d' as PolyDrawSpace,
   polyDrawSurface: false,
-  polyDrawContinuous: false,
+  polyDrawContinuous: true,
   polyDrawTargetId: null as string | null,
   shadingMode: 'solid' as ShadingMode,
   faceSide: 'double' as FaceSideMode,
@@ -124,6 +139,11 @@ function bump() {
 }
 
 function applyShadingToMesh(mesh: Mesh, selected: boolean) {
+  if (isReferenceImageMesh(mesh)) {
+    syncReferenceImageMaterial(mesh, selected)
+    return
+  }
+
   const materialId = (mesh.userData.materialId as string | undefined) ?? DEFAULT_MATERIAL_ID
   const definition =
     cadState.materials.find((mat) => mat.id === materialId) ?? cadState.materials[0]
@@ -167,7 +187,7 @@ export function refreshMaterials() {
 
 export function refreshObject(obj: CadObject) {
   syncObjectMetadata(obj)
-  addWireEdges(obj.mesh)
+  if (obj.type !== 'referenceImage') addWireEdges(obj.mesh)
   applyShadingToMesh(obj.mesh, obj.id === cadState.selectedId)
   bump()
 }
@@ -212,6 +232,17 @@ export function updateSelectedTransform(t: {
   if (t.rotation) sel.mesh.rotation.set(t.rotation[0], t.rotation[1], t.rotation[2])
   if (t.scale) sel.mesh.scale.fromArray(t.scale)
   bump()
+}
+
+export function nudgeSelectedReferenceDepth(camera: Camera, deltaY: number, step = 0.02): boolean {
+  const sel = getSelected()
+  if (!sel || sel.type !== 'referenceImage' || sel.node.locked) return false
+
+  const dir = new Vector3()
+  camera.getWorldDirection(dir)
+  sel.mesh.position.add(dir.multiplyScalar(deltaY * step))
+  bump()
+  return true
 }
 
 export function selectObject(id: string | null) {
@@ -305,6 +336,50 @@ export function addObject(type: PrimitiveType, recordHistory = true) {
   selectObject(id)
 }
 
+export async function addReferenceImageFromFile(
+  file: File,
+  position: Vector3,
+  recordHistory = true,
+): Promise<string | null> {
+  if (!sceneRef) return null
+  if (recordHistory) beginHistoryAction()
+
+  try {
+    const dataUrl = await readFileAsDataUrl(file)
+    const aspect = await loadReferenceImageAspect(dataUrl)
+    const texture = await loadReferenceTexture(dataUrl)
+    const geo = createReferenceImageGeometry(aspect)
+    const plane = new Mesh(geo)
+
+    objCounter++
+    const name = referenceImageNameFromFile(file, objCounter)
+    const root = createReferenceImageRoot(plane, position, {
+      type: 'referenceImage',
+      name,
+      isReferenceImage: true,
+      outline: null,
+      wireEdges: null,
+      materialId: DEFAULT_MATERIAL_ID,
+      referenceImageUrl: dataUrl,
+      referenceImageName: file.name,
+      referenceTexture: texture,
+    })
+    root.renderOrder = nextReferenceImageRenderOrder()
+    syncReferenceImageMaterial(root, false)
+    sceneRef.add(root)
+
+    const id = crypto.randomUUID()
+    const obj = createCadObject({ id, mesh: root as unknown as Mesh, type: 'referenceImage', name })
+    cadState.objects = [...cadState.objects, syncObjectMetadata(obj)]
+    cadState.rootNodeIds = [...cadState.rootNodeIds, id]
+    selectObject(id)
+    return id
+  } catch {
+    alert('Could not load that image.')
+    return null
+  }
+}
+
 export function addObjectInBox(
   type: PrimitiveType,
   min: Vector3,
@@ -341,7 +416,11 @@ export function addPolygonObject(
   if (!sceneRef || vertices.length < 3) return null
   if (recordHistory) beginHistoryAction()
   const geo = createPolygonGeometry(vertices, indices, space)
+  geo.computeBoundingBox()
+  const center = geo.boundingBox!.getCenter(new Vector3())
+  geo.translate(-center.x, -center.y, -center.z)
   const mesh = new Mesh(geo, matDefault())
+  mesh.position.copy(center)
   mesh.castShadow = true
   objCounter++
   const name = `${label}.${String(objCounter).padStart(3, '0')}`
@@ -366,10 +445,24 @@ export function addPolygonObject(
   return id
 }
 
+function resolvePolyDrawMergeTarget(): CadObject | null {
+  const targetId = cadState.polyDrawTargetId
+  if (targetId) {
+    const existing = cadState.objects.find((o) => o.id === targetId) ?? null
+    if (existing && !isReferenceImage(existing)) return existing
+  }
+  const sel = getSelected()
+  if (sel && !isReferenceImage(sel)) return sel
+  return null
+}
+
 function finishPolyDrawCommit(mode: PolyDrawMode, continuous: boolean) {
   if (continuous) {
-    const sel = getSelected()
-    if (sel) cadState.polyDrawTargetId = sel.id
+    const target = resolvePolyDrawMergeTarget()
+    if (target) {
+      cadState.polyDrawTargetId = target.id
+      if (cadState.selectedId !== target.id) selectObject(target.id)
+    }
     cadState.drawPolyMode = mode
     cadState.activeTool = 'drawpoly'
     getPolyDrawTool()?.start(mode)
@@ -388,23 +481,36 @@ export function commitPolyDraw(
   mode: PolyDrawMode,
   space: PolyDrawSpace,
 ) {
-  if (!sceneRef || vertices.length < 3) return
-
-  const targetId = cadState.polyDrawTargetId
-  const sel = targetId ? cadState.objects.find((o) => o.id === targetId) ?? null : null
   const continuous = cadState.polyDrawContinuous
-
-  if (sel) {
-    beginHistoryAction()
-    if (!mergePolygonIntoMesh(sel.mesh, vertices, indices)) return
-    refreshObject(sel)
-    finishPolyDrawCommit(mode, continuous)
+  if (!sceneRef || vertices.length < 3) {
+    if (continuous) finishPolyDrawCommit(mode, true)
     return
   }
 
-  const label = mode === 'triangle' ? 'Triangle' : mode === 'quad' ? 'Quad' : 'Polygon'
-  addPolygonObject(vertices, indices, label, space)
-  finishPolyDrawCommit(mode, continuous)
+  const mergeTarget = resolvePolyDrawMergeTarget()
+  let committed = false
+
+  if (mergeTarget?.mesh instanceof Mesh) {
+    beginHistoryAction()
+    if (mergePolygonIntoMesh(mergeTarget.mesh, vertices, indices)) {
+      refreshObject(mergeTarget)
+      cadState.polyDrawTargetId = mergeTarget.id
+      committed = true
+    }
+  }
+
+  if (!committed && !mergeTarget) {
+    const label = mode === 'triangle' ? 'Triangle' : mode === 'quad' ? 'Quad' : 'Polygon'
+    const id = addPolygonObject(vertices, indices, label, space)
+    if (id) {
+      cadState.polyDrawTargetId = id
+      committed = true
+    }
+  }
+
+  if (committed || continuous) {
+    finishPolyDrawCommit(mode, continuous)
+  }
 }
 
 export function setPolyDrawSpace(space: PolyDrawSpace) {
@@ -430,12 +536,19 @@ export function startDrawPoly(mode: PolyDrawMode) {
   cancelSubdivide()
   cancelBevel()
 
-  if (!getSelected()) {
-    cadState.editMode = 'object'
+  const sel = getSelected()
+  if (!sel || isReferenceImage(sel)) {
     selectObject(null)
     cadState.polyDrawTargetId = null
   } else {
-    cadState.polyDrawTargetId = cadState.selectedId
+    cadState.polyDrawTargetId = sel.id
+  }
+
+  if (
+    cadState.activeViewport === FRONT_VP_INDEX ||
+    cadState.activeViewport === SIDE_VP_INDEX
+  ) {
+    cadState.polyDrawSpace = '3d'
   }
 
   cadState.drawPolyMode = mode
@@ -601,6 +714,10 @@ function disposeObject(obj: CadObject) {
   if (!sceneRef) return
   disposeMeshOutline(obj.mesh)
   sceneRef.remove(obj.mesh)
+  if (obj.type === 'referenceImage') {
+    disposeReferenceImageObject(obj.mesh)
+    return
+  }
   obj.mesh.geometry.dispose()
   disposeOwnedMeshMaterial(obj.mesh)
 }
@@ -637,6 +754,10 @@ export function setEditMode(mode: EditMode) {
   cadState.selEdges = new Set()
   cadState.selFaces = new Set()
   clearSubHover()
+  if (cadState.activeTool === 'drawpoly' && mode !== 'object') {
+    const sel = getSelected()
+    if (sel && !isReferenceImage(sel)) cadState.polyDrawTargetId = sel.id
+  }
   refreshMaterials()
   bump()
 }
@@ -922,6 +1043,40 @@ export function selectAllSub() {
     cadState.selEdges = s
   }
   bump()
+}
+
+export function hasFullSubSelection(): boolean {
+  const sel = getSelected()
+  if (!sel || cadState.editMode === 'object') return false
+
+  const pos = sel.mesh.geometry.attributes.position
+  const idx = sel.mesh.geometry.index
+
+  if (cadState.editMode === 'vertex' && pos) {
+    return pos.count > 0 && cadState.selVerts.size >= pos.count
+  }
+  if (cadState.editMode === 'face' && idx) {
+    const faceCount = Math.floor(idx.count / 3)
+    return faceCount > 0 && cadState.selFaces.size >= faceCount
+  }
+  if (cadState.editMode === 'edge' && idx) {
+    const edges = selectableEdges(sel.mesh)
+    return edges.length > 0 && cadState.selEdges.size >= edges.length
+  }
+  return false
+}
+
+export function toggleSelectAll() {
+  if (cadState.editMode === 'object') {
+    if (cadState.selectedId) selectObject(null)
+    return
+  }
+
+  const sel = getSelected()
+  if (!sel) return
+
+  if (hasFullSubSelection()) deselectAllSub()
+  else selectAllSub()
 }
 
 export function deselectAllSub() {
@@ -1274,6 +1429,7 @@ export async function loadSceneFromJson() {
     syncSceneObjectOrder()
     refreshMaterials()
     await Promise.all(objects.map((obj) => restoreUvTextureFromUrl(obj)))
+    await Promise.all(objects.map((obj) => restoreReferenceImageFromUrl(obj)))
     refreshMaterials()
     selectObject(objects[0]?.id ?? null)
   } catch {

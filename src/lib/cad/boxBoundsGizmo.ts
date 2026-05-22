@@ -21,6 +21,7 @@ import {
   refitMeshToBounds,
   type StoredBounds,
 } from './boxBounds'
+import { GIZMO_ACTIVE } from './gizmoTheme'
 import type { BoxBounds } from './geometry'
 import type { PrimitiveType } from './types'
 
@@ -44,7 +45,7 @@ export class BoxBoundsGizmo {
   private readonly wireBox: LineSegments
   private readonly handles: Mesh[] = []
   private readonly handleMaterial = new MeshBasicMaterial({
-    color: 0xffcc66,
+    color: GIZMO_ACTIVE,
     depthTest: false,
     toneMapped: false,
   })
@@ -68,7 +69,7 @@ export class BoxBoundsGizmo {
   constructor() {
     this.wireBox = new LineSegments(
       new EdgesGeometry(new BoxGeometry(1, 1, 1)),
-      new LineBasicMaterial({ color: 0xffcc66, toneMapped: false }),
+      new LineBasicMaterial({ color: GIZMO_ACTIVE, toneMapped: false }),
     )
     this.root.add(this.wireBox)
 

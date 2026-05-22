@@ -19,7 +19,7 @@
     mirrorSelected,
     projectSelectedUv,
     saveSceneToFile,
-    selectAllSub,
+    toggleSelectAll,
     setShading,
     setFaceSide,
     setSolidSeeThrough,
@@ -35,7 +35,8 @@
   import { shortcutHint, shortcutLabel, shortcutLabelsAll } from '../cad/shortcuts'
   import type { PolyDrawMode, PrimitiveType } from '../cad/types'
   import {
-    setViewportLayoutMode,
+    applyViewportLayoutMode,
+    toggleUvEditor,
     toggleViewportMaximize,
     viewportLayout,
     type ViewportLayoutMode,
@@ -46,6 +47,9 @@
   const hasFaceSelection = $derived(cadState.editMode === 'face' && cadState.selFaces.size > 0)
   const hasEdgeSelection = $derived(cadState.editMode === 'edge' && cadState.selEdges.size >= 3)
   const canEditMesh = $derived(cadState.editMode !== 'object' && hasSelection)
+  const canToggleSelectAll = $derived(
+    cadState.editMode === 'object' ? !!cadState.selectedId : canEditMesh,
+  )
 
   const primitives: { type: PrimitiveType; label: string; action: string }[] = [
     { type: 'box', label: 'Box', action: 'add:box' },
@@ -82,12 +86,16 @@
   }
 
   function pickLayout(mode: ViewportLayoutMode) {
-    setViewportLayoutMode(mode)
+    applyViewportLayoutMode(mode, cadState.activeViewport)
     closeMenus()
   }
 
-  function openUvEditor() {
-    setViewportLayoutMode('uvEditor')
+  function pickLayoutFromToolbar(mode: ViewportLayoutMode) {
+    applyViewportLayoutMode(mode, cadState.activeViewport)
+  }
+
+  function toggleUvEditorLayout() {
+    toggleUvEditor()
     closeMenus()
   }
 
@@ -246,14 +254,14 @@
     <button type="button" title="Selection tools" onclick={(e) => { e.stopPropagation(); toggleMenu('select') }}>Select</button>
     {#if openMenu === 'select'}
       <div class="dropdown" role="menu" tabindex="-1" onmousedown={(e) => e.stopPropagation()}>
-        <button type="button" class="dd-item" disabled={!canEditMesh} title={shortcutHint('Select All', 'selectAll')} onclick={() => { selectAllSub(); closeMenus() }}>
-          Select All {#if sc('selectAll')}<span>{sc('selectAll')}</span>{/if}
+        <button type="button" class="dd-item" disabled={!canToggleSelectAll} title={shortcutHint('Select / Deselect All', 'selectToggleAll')} onclick={() => { toggleSelectAll(); closeMenus() }}>
+          Select / Deselect All {#if sc('selectToggleAll')}<span>{sc('selectToggleAll')}</span>{/if}
         </button>
         <button type="button" class="dd-item" disabled={!canEditMesh} title={shortcutHint('Grow Selection', 'selectGrow')} onclick={() => { growSubSelection(); closeMenus() }}>
           Grow Selection {#if sc('selectGrow')}<span>{sc('selectGrow')}</span>{/if}
         </button>
-        <button type="button" class="dd-item" disabled={!canEditMesh} title={shortcutHint('Deselect All', 'deselectAll')} onclick={() => { deselectAllSub(); closeMenus() }}>
-          Deselect All {#if sc('deselectAll')}<span>{sc('deselectAll')}</span>{/if}
+        <button type="button" class="dd-item" disabled={!canEditMesh} onclick={() => { deselectAllSub(); closeMenus() }}>
+          Deselect All
         </button>
         <button type="button" class="dd-item" disabled={cadState.editMode !== 'face' || !hasSelection} title={shortcutHint('Invert Selection', 'selectInvert')} onclick={() => { invertFaceSelection(); closeMenus() }}>
           Invert Selection {#if sc('selectInvert')}<span>{sc('selectInvert')}</span>{/if}
@@ -330,9 +338,52 @@
     {/if}
   </div>
 
-  <div class="menu-item">
-    <button type="button" title="Open UV Editor" onclick={openUvEditor}>UV Editor</button>
+  <div class="menu-item" class:open={viewportLayout.mode === 'uvEditor'}>
+    <button type="button" title="Toggle UV Editor" onclick={toggleUvEditorLayout}>UV Editor</button>
   </div>
+
+  <div class="menubar-spacer"></div>
+
+  {#if viewportLayout.mode !== 'uvEditor'}
+    <div class="layout-toolbar" aria-label="Viewport layout">
+      <button
+        type="button"
+        class="layout-btn"
+        class:active={viewportLayout.mode === 'quad'}
+        title={shortcutHint('Quad view', 'view:quad')}
+        onclick={() => pickLayoutFromToolbar('quad')}
+      >
+        Quad
+      </button>
+      <button
+        type="button"
+        class="layout-btn"
+        class:active={viewportLayout.mode === 'splitVertical'}
+        title={shortcutHint('Vertical split', 'view:splitVertical')}
+        onclick={() => pickLayoutFromToolbar('splitVertical')}
+      >
+        Vertical
+      </button>
+      <button
+        type="button"
+        class="layout-btn"
+        class:active={viewportLayout.mode === 'splitHorizontal'}
+        title={shortcutHint('Horizontal split', 'view:splitHorizontal')}
+        onclick={() => pickLayoutFromToolbar('splitHorizontal')}
+      >
+        Horizontal
+      </button>
+      <button
+        type="button"
+        class="layout-btn"
+        class:active={viewportLayout.mode === 'single'}
+        title={shortcutHint('Maximize view', 'viewport:maximize')}
+        onclick={() => toggleViewportMaximize()}
+      >
+        Max
+      </button>
+    </div>
+  {/if}
 </nav>
 
 <style>
@@ -419,5 +470,42 @@
     height: 1px;
     background: #111;
     margin: 3px 0;
+  }
+
+  .menubar-spacer {
+    flex: 1;
+    min-width: 12px;
+  }
+
+  .layout-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-right: 8px;
+    padding: 2px;
+    border: 1px solid #353535;
+    border-radius: 4px;
+    background: #242424;
+  }
+
+  .layout-btn {
+    display: inline-flex;
+    align-items: center;
+    height: 22px;
+    padding: 0 8px;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    color: #b9c2cc;
+    background: transparent;
+    font-size: 11px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .layout-btn:hover,
+  .layout-btn.active {
+    color: #e8f2ff;
+    border-color: #2f6ebd;
+    background: #174b87;
   }
 </style>

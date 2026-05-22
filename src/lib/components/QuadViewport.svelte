@@ -10,11 +10,13 @@
     Vector2,
     Vector3,
     WebGLRenderer,
+    Mesh,
   } from 'three'
   import {
     bindScene,
     cadState,
     addObjectInBox,
+    addReferenceImageFromFile,
     commitPolyDraw,
     cancelDrawPrimitive,
     cancelDrawPoly,
@@ -27,6 +29,7 @@
     commitInsetFaces,
     commitSubdivide,
     initDefaultScene,
+    nudgeSelectedReferenceDepth,
     refreshObject,
   } from '../cad/cadState.svelte'
   import { beginHistoryAction } from '../cad/history.svelte'
@@ -45,41 +48,49 @@
   import { EDIT_HELPER_LIMITS } from '../cad/editPerformance'
   import { registerViewportBridge } from '../cad/viewportBridge'
   import type { ViewportRuntime } from '../cad/viewportRuntime'
-  import {
-    VIEWPORT_CONFIGS,
-    createCamera,
-    createInteraction,
-    updateOrthoAspect,
-    updatePerspAspect,
-  } from '../cad/viewports'
+import {
+  VIEWPORT_CONFIGS,
+  createCamera,
+  createInteraction,
+  updateOrthoAspect,
+  updatePerspAspect,
+  FRONT_VP_INDEX,
+  SIDE_VP_INDEX,
+} from '../cad/viewports'
   import {
     setQuadSplit,
     setSecondaryViewport,
     setSplit,
-    setViewportLayoutMode,
-    toggleViewportMaximize,
     viewportLayout,
-    type ViewportLayoutMode,
   } from '../cad/viewportLayout.svelte'
   import CadTransformGizmo from './CadTransformGizmo.svelte'
   import PerspectiveViewportGizmo from './PerspectiveViewportGizmo.svelte'
   import UvEditor from './UvEditor.svelte'
-  import { shortcutHint } from '../cad/shortcuts'
   import {
     PERSP_GIZMO_CLASS,
     PERSP_VP_INDEX,
     type PerspectiveGizmoApi,
   } from '../cad/perspectiveViewportGizmo'
+  import {
+    dataTransferMayContainImage,
+    getPickableObjectMeshes,
+    imageFileFromDrop,
+    updateReferenceBillboards,
+  } from '../cad/referenceImage'
+  import { worldPointForReferenceImageDrop } from '../cad/viewportPick'
 
   let quadContainer = $state<HTMLDivElement>()
   let vpEls: HTMLDivElement[] = []
   let canvases: HTMLCanvasElement[] = []
   let activeVp = $state(1)
+  let dragOverVp = $state<number | null>(null)
 
   let scene = $state<Scene | null>(null)
   let viewports = $state<ViewportRuntime[]>([])
   let gizmoDragging = false
   let grabHistoryStarted = false
+  let refDepthHistoryStarted = false
+  let refDepthHistoryTimer = 0
   let marqueeStart:
     | {
         vpIndex: number
@@ -158,8 +169,16 @@
     return {
       camera: vp.camera,
       element: vp.el,
-      sceneMeshes: cadState.objects.map((o) => o.mesh),
+      orbitTarget: vp.interaction.orbitTarget,
+      sceneMeshes: cadState.objects
+        .filter((o) => o.type !== 'referenceImage')
+        .map((o) => o.mesh)
+        .filter((mesh): mesh is Mesh => mesh instanceof Mesh && !!mesh.geometry),
     }
+  }
+
+  function pickableMeshes() {
+    return getPickableObjectMeshes(cadState.objects)
   }
 
   function polyDrawSettings() {
@@ -168,6 +187,46 @@
       surface: cadState.polyDrawSurface,
       snap: cadState.transformSnap,
     }
+  }
+
+  function onViewportDragEnter(e: DragEvent, index: number) {
+    if (!dataTransferMayContainImage(e.dataTransfer)) return
+    e.preventDefault()
+    dragOverVp = index
+  }
+
+  function onViewportDragOver(e: DragEvent, index: number) {
+    if (!dataTransferMayContainImage(e.dataTransfer)) return
+    e.preventDefault()
+    dragOverVp = index
+  }
+
+  function onViewportDragLeave(e: DragEvent, index: number) {
+    if (dragOverVp !== index) return
+    const next = e.relatedTarget as Node | null
+    if (next && vpEls[index]?.contains(next)) return
+    dragOverVp = null
+  }
+
+  async function onViewportDrop(e: DragEvent, index: number) {
+    dragOverVp = null
+    const file = imageFileFromDrop(e.dataTransfer)
+    if (!file) return
+    e.preventDefault()
+
+    const vp = viewports[index]
+    if (!vp) return
+
+    activateViewport(index)
+    updateReferenceBillboards(cadState.objects, vp.camera)
+    const world = worldPointForReferenceImageDrop(
+      vp,
+      e.clientX,
+      e.clientY,
+      pickableMeshes(),
+    )
+    if (!world) return
+    await addReferenceImageFromFile(file, world)
   }
 
   function syncPerspGizmo(vp: ViewportRuntime) {
@@ -211,7 +270,11 @@
   function activateViewport(index: number) {
     activeVp = index
     cadState.activeViewport = index
-    if (viewportLayout.mode !== 'quad' && viewportLayout.secondaryViewport === index) {
+    if (
+      viewportLayout.mode !== 'quad' &&
+      viewportLayout.mode !== 'splitVertical' &&
+      viewportLayout.secondaryViewport === index
+    ) {
       setSecondaryViewport(fallbackSecondaryViewport(index))
     }
     const vp = viewports[index]
@@ -232,6 +295,9 @@
     if (viewportLayout.mode === 'quad') return true
     if (viewportLayout.mode === 'single') return index === activeVp
     if (viewportLayout.mode === 'uvEditor') return index === activeVp
+    if (viewportLayout.mode === 'splitVertical') {
+      return index === FRONT_VP_INDEX || index === SIDE_VP_INDEX
+    }
     return index === activeVp || index === secondaryViewport()
   }
 
@@ -242,7 +308,9 @@
       return 'grid-column: 1; grid-row: 1 / 3;'
     }
     if (viewportLayout.mode === 'splitVertical') {
-      return index === activeVp ? 'grid-column: 1; grid-row: 1 / 3;' : 'grid-column: 2; grid-row: 1 / 3;'
+      if (index === FRONT_VP_INDEX) return 'grid-column: 1; grid-row: 1 / 3;'
+      if (index === SIDE_VP_INDEX) return 'grid-column: 2; grid-row: 1 / 3;'
+      return 'display: none;'
     }
     if (viewportLayout.mode === 'splitHorizontal') {
       return index === activeVp ? 'grid-column: 1 / 3; grid-row: 1;' : 'grid-column: 1 / 3; grid-row: 2;'
@@ -269,12 +337,6 @@
       return `grid-template-columns: 1fr 1fr; grid-template-rows: ${splitY};`
     }
     return `grid-template-columns: ${quadX}; grid-template-rows: ${quadY};`
-  }
-
-  function setLayout(mode: ViewportLayoutMode) {
-    if (mode !== 'quad') setSecondaryViewport(fallbackSecondaryViewport(activeVp))
-    setViewportLayoutMode(mode)
-    void tick().then(resizeAll)
   }
 
   function startResize(kind: 'quadX' | 'quadY' | 'splitX' | 'splitY', e: PointerEvent) {
@@ -324,6 +386,7 @@
   }
 
   function scheduleHover(vp: ViewportRuntime, clientX: number, clientY: number) {
+    if (isActiveDrawTool()) return
     pendingHover = { vp, clientX, clientY }
     if (hoverFrame) return
 
@@ -614,7 +677,7 @@
           vp.el,
           e.clientX,
           e.clientY,
-          cadState.objects.map((o) => o.mesh),
+          pickableMeshes(),
           getSubHelperObjects(),
           e.shiftKey || e.ctrlKey || e.metaKey,
         )
@@ -732,9 +795,10 @@
         !box &&
         intr.dragDist < 4 &&
         intr.btn === 0 &&
+        !isActiveDrawTool() &&
         !(cadState.activeTool === 'grab' && cadState.editMode !== 'object')
       ) {
-        const meshes = cadState.objects.map((o) => o.mesh)
+        const meshes = pickableMeshes()
         pickAt(
           vp.camera,
           vp.el,
@@ -779,6 +843,26 @@
       if (isBeveling() && getViewportAtPoint(e.clientX, e.clientY) === vp) {
         getBevelTool()?.handleWheel(e.deltaY, cadState.transformSnap)
         return
+      }
+      if (
+        e.shiftKey &&
+        getViewportAtPoint(e.clientX, e.clientY) === vp &&
+        cadState.objects.find((o) => o.id === cadState.selectedId)?.type === 'referenceImage'
+      ) {
+        const sel = cadState.objects.find((o) => o.id === cadState.selectedId)
+        if (sel && !sel.node.locked) {
+          if (!refDepthHistoryStarted) {
+            beginHistoryAction()
+            refDepthHistoryStarted = true
+          }
+          clearTimeout(refDepthHistoryTimer)
+          refDepthHistoryTimer = window.setTimeout(() => {
+            refDepthHistoryStarted = false
+          }, 400)
+          const step = worldUnitsPerPixel(vp, sel.mesh.position) * 0.65
+          nudgeSelectedReferenceDepth(vp.camera, e.deltaY, step)
+          return
+        }
       }
       zoomViewport(vp, e.deltaY, e.clientX, e.clientY)
     }
@@ -898,6 +982,14 @@
           } else {
             transformGizmoApi?.setVisible(false)
           }
+        const skipBillboardId =
+          gizmoDragging &&
+          cadState.gizmoMode === 'scale' &&
+          cadState.selectedId &&
+          cadState.objects.find((o) => o.id === cadState.selectedId)?.type === 'referenceImage'
+            ? cadState.selectedId
+            : null
+        updateReferenceBillboards(cadState.objects, vp.camera, skipBillboardId)
           vp.renderer.render(cadScene, vp.camera)
           if (vp.config.id === 'persp') perspGizmoApi?.render()
         }
@@ -957,20 +1049,19 @@
     viewportLayout.splitX
     viewportLayout.splitY
     viewportLayout.secondaryViewport
+    if (
+      viewportLayout.mode === 'splitVertical' &&
+      activeVp !== FRONT_VP_INDEX &&
+      activeVp !== SIDE_VP_INDEX
+    ) {
+      activeVp = FRONT_VP_INDEX
+      cadState.activeViewport = FRONT_VP_INDEX
+    }
     void tick().then(resizeAll)
   })
 </script>
 
 <div class="quad-shell">
-  {#if viewportLayout.mode !== 'uvEditor'}
-    <div class="layout-bar" aria-label="Viewport layout">
-      <button class:active={viewportLayout.mode === 'quad'} type="button" title={shortcutHint('Quad view', 'view:quad')} onclick={() => setLayout('quad')}>Quad</button>
-      <button class:active={viewportLayout.mode === 'splitVertical'} type="button" title={shortcutHint('Vertical split', 'view:splitVertical')} onclick={() => setLayout('splitVertical')}>Vertical</button>
-      <button class:active={viewportLayout.mode === 'splitHorizontal'} type="button" title={shortcutHint('Horizontal split', 'view:splitHorizontal')} onclick={() => setLayout('splitHorizontal')}>Horizontal</button>
-      <button class:active={viewportLayout.mode === 'single'} type="button" title={shortcutHint('Maximize view', 'viewport:maximize')} onclick={() => toggleViewportMaximize()}>Max</button>
-    </div>
-  {/if}
-
 <div
   class="quad-grid"
   class:single={viewportLayout.mode === 'single'}
@@ -984,8 +1075,15 @@
       class="vp"
       class:vp-hidden={!isViewportVisible(i)}
       class:vp-active={activeVp === i}
+      class:vp-drag-over={dragOverVp === i}
       style={viewportStyle(i)}
+      role="region"
+      aria-label={`${cfg.label} viewport`}
       use:bindVp={i}
+      ondragenter={(e) => onViewportDragEnter(e, i)}
+      ondragover={(e) => onViewportDragOver(e, i)}
+      ondragleave={(e) => onViewportDragLeave(e, i)}
+      ondrop={(e) => onViewportDrop(e, i)}
     >
       <canvas use:bindCanvas={i}></canvas>
       {#if cfg.id === 'persp' && viewports[PERSP_VP_INDEX]?.camera instanceof PerspectiveCamera}
@@ -1078,38 +1176,6 @@
     min-height: 0;
   }
 
-  .layout-bar {
-    position: absolute;
-    top: 8px;
-    right: 10px;
-    display: flex;
-    gap: 4px;
-    padding: 3px;
-    background: rgba(30, 30, 30, 0.88);
-    border: 1px solid #353535;
-    border-radius: 4px;
-    z-index: 12;
-  }
-
-  .layout-bar button {
-    display: inline-flex;
-    align-items: center;
-    height: 22px;
-    padding: 0 8px;
-    border: 1px solid transparent;
-    border-radius: 3px;
-    color: #b9c2cc;
-    background: transparent;
-    font-size: 11px;
-  }
-
-  .layout-bar button:hover,
-  .layout-bar button.active {
-    color: #e8f2ff;
-    border-color: #2f6ebd;
-    background: #174b87;
-  }
-
   .vp {
     position: relative;
     overflow: hidden;
@@ -1146,6 +1212,11 @@
 
   .vp.vp-active .vp-label {
     color: #9dccff;
+  }
+
+  .vp.vp-drag-over {
+    outline-color: #ffd64a;
+    background: #242018;
   }
 
   .uv-pane {

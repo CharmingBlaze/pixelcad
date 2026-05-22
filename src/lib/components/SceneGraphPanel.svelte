@@ -357,7 +357,9 @@
                 </button>
               {/if}
             </div>
-            <span class="node-stats" title={`${obj.stats.faces} faces`}>{obj.stats.faces}</span>
+            <span class="node-stats" title={obj.type === 'referenceImage' ? 'Reference image' : `${obj.stats.faces} faces`}>
+              {obj.type === 'referenceImage' ? 'Ref' : obj.stats.faces}
+            </span>
             <button
               type="button"
               class="icon-toggle lock"

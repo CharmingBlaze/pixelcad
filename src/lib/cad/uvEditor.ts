@@ -23,9 +23,8 @@ export function prepareUvIsland(mesh: Mesh, faceSelection: Set<number>): boolean
   if (initialized.has(key)) return false
 
   const geometryChanged = splitIslandUvVertices(mesh, indices)
-  const ordered = orderedBoundaryVertices(mesh, indices)
-  if (ordered.length >= 3 && !restoreIslandUvSnapshot(mesh, indices)) {
-    normalizeDegenerateIslandUv(mesh, ordered, nextIslandSlot(mesh))
+  if (!restoreIslandUvSnapshot(mesh, indices)) {
+    assignIslandPlanarUvs(mesh, indices, nextIslandSlot(mesh))
   }
   saveIslandUvSnapshot(mesh, indices)
 
@@ -214,68 +213,93 @@ function getIslandSnapshots(mesh: Mesh): Record<string, Record<string, [number, 
   return mesh.userData.uvIslandSnapshots as Record<string, Record<string, [number, number]>>
 }
 
-function normalizeDegenerateIslandUv(mesh: Mesh, vertices: number[], islandSlot: number) {
+function assignIslandPlanarUvs(mesh: Mesh, faceIndices: number[], islandSlot: number) {
+  const pos = mesh.geometry.attributes.position
+  if (!pos) return
+
+  ensureUvAttribute(mesh)
   const uv = mesh.geometry.attributes.uv
+  const vertices = islandVertexIndices(mesh, faceIndices)
+  if (vertices.size < 3) return
+
+  const normal = averageFaceNormal(mesh, faceIndices)
+  const { tangent, bitangent } = facePlaneUvBasis(normal)
+
   let minU = Infinity
   let maxU = -Infinity
   let minV = Infinity
   let maxV = -Infinity
+  const projected = new Map<number, [number, number]>()
 
-  for (const vertex of vertices) {
-    const u = uv.getX(vertex)
-    const v = uv.getY(vertex)
+  for (const vertexIndex of vertices) {
+    const point = new Vector3(pos.getX(vertexIndex), pos.getY(vertexIndex), pos.getZ(vertexIndex))
+    const u = point.dot(tangent)
+    const v = point.dot(bitangent)
+    projected.set(vertexIndex, [u, v])
     minU = Math.min(minU, u)
     maxU = Math.max(maxU, u)
     minV = Math.min(minV, v)
     maxV = Math.max(maxV, v)
   }
 
-  const hasArea = maxU - minU > 0.05 && maxV - minV > 0.05
-  const uniqueUvPoints = new Set(
-    vertices.map((vertex) => `${uv.getX(vertex).toFixed(4)}:${uv.getY(vertex).toFixed(4)}`),
-  )
-  if (hasArea && uniqueUvPoints.size === vertices.length) return
-
-  const defaults = defaultIslandUvs(vertices.length, islandSlot)
-  vertices.forEach((vertex, index) => uv.setXY(vertex, defaults[index].x, defaults[index].y))
-  uv.needsUpdate = true
-}
-
-function defaultIslandUvs(count: number, islandSlot: number): Vector2[] {
+  const spanU = Math.max(maxU - minU, 0.0001)
+  const spanV = Math.max(maxV - minV, 0.0001)
   const col = islandSlot % 3
   const row = Math.floor(islandSlot / 3)
   const offsetU = col * 0.3
   const offsetV = row * 0.3
   const scale = 0.22
 
-  if (count === 3) {
-    return [
-      new Vector2(offsetU + scale * 0.5, offsetV + scale * 1),
-      new Vector2(offsetU, offsetV),
-      new Vector2(offsetU + scale, offsetV),
-    ].map((point) => new Vector2(clamp01(point.x), clamp01(point.y)))
+  for (const [vertexIndex, [u, v]] of projected) {
+    const normalizedU = offsetU + ((u - minU) / spanU) * scale
+    const normalizedV = offsetV + ((v - minV) / spanV) * scale
+    uv.setXY(vertexIndex, clamp01(normalizedU), clamp01(normalizedV))
+  }
+  uv.needsUpdate = true
+}
+
+function islandVertexIndices(mesh: Mesh, faceIndices: number[]): Set<number> {
+  const islandFaceSet = new Set(faceIndices)
+  const idx = mesh.geometry.index
+  const vertices = new Set<number>()
+  if (!idx) return vertices
+
+  const indexArray = idx.array
+  for (let i = 0; i < indexArray.length; i += 3) {
+    if (!islandFaceSet.has(i / 3)) continue
+    vertices.add(indexArray[i])
+    vertices.add(indexArray[i + 1])
+    vertices.add(indexArray[i + 2])
+  }
+  return vertices
+}
+
+function averageFaceNormal(mesh: Mesh, faceIndices: number[]): Vector3 {
+  const pos = mesh.geometry.attributes.position
+  const normal = new Vector3()
+  if (!pos || faceIndices.length === 0) return new Vector3(0, 1, 0)
+
+  for (const faceIndex of faceIndices) {
+    const face = faceVertexIndices(mesh, faceIndex)
+    if (!face) continue
+    const a = new Vector3(pos.getX(face[0]), pos.getY(face[0]), pos.getZ(face[0]))
+    const b = new Vector3(pos.getX(face[1]), pos.getY(face[1]), pos.getZ(face[1]))
+    const c = new Vector3(pos.getX(face[2]), pos.getY(face[2]), pos.getZ(face[2]))
+    normal.add(new Vector3().crossVectors(b.clone().sub(a), c.clone().sub(a)))
   }
 
-  if (count === 4) {
-    return [
-      new Vector2(offsetU, offsetV + scale),
-      new Vector2(offsetU, offsetV),
-      new Vector2(offsetU + scale, offsetV),
-      new Vector2(offsetU + scale, offsetV + scale),
-    ].map((point) => new Vector2(clamp01(point.x), clamp01(point.y)))
-  }
+  if (normal.lengthSq() <= 1e-10) return new Vector3(0, 1, 0)
+  return normal.normalize()
+}
 
-  const points: Vector2[] = []
-  for (let i = 0; i < count; i++) {
-    const angle = -Math.PI / 2 + (Math.PI * 2 * i) / count
-    points.push(
-      new Vector2(
-        clamp01(offsetU + scale * 0.5 + Math.cos(angle) * scale * 0.45),
-        clamp01(offsetV + scale * 0.5 - Math.sin(angle) * scale * 0.45),
-      ),
-    )
-  }
-  return points
+function facePlaneUvBasis(normal: Vector3): { tangent: Vector3; bitangent: Vector3 } {
+  const n = normal.clone().normalize()
+  const worldUp = Math.abs(n.y) < 0.99 ? new Vector3(0, 1, 0) : new Vector3(0, 0, 1)
+  const tangent = new Vector3().crossVectors(worldUp, n)
+  if (tangent.lengthSq() <= 1e-10) tangent.crossVectors(new Vector3(1, 0, 0), n)
+  tangent.normalize()
+  const bitangent = new Vector3().crossVectors(n, tangent).normalize()
+  return { tangent, bitangent }
 }
 
 function islandStorageKey(faceIndices: number[]): string {

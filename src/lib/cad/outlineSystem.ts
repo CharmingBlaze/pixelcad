@@ -6,12 +6,13 @@ import {
   type Material,
   type Mesh,
 } from 'three'
+import { SELECTION_ACCENT } from './materials'
 
 const DEFAULT_THRESHOLD_ANGLE = 15
 const OUTLINE_COLOR = 0x111111
-const SELECTED_OUTLINE_COLOR = 0x111111
-const SELECTION_HIGHLIGHT_COLOR = 0x66ccff
-const SELECTION_HIGHLIGHT_OPACITY = 0.38
+const SELECTED_OUTLINE_COLOR = 0xc9a84a
+const SELECTION_HIGHLIGHT_COLOR = SELECTION_ACCENT
+const SELECTION_HIGHLIGHT_OPACITY = 0.22
 const SELECTION_HIGHLIGHT_SCALE = 1.002
 
 export interface MeshOutline {

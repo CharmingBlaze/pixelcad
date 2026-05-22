@@ -9,7 +9,6 @@
     cancelSubdivide,
     clearScene,
     deleteSelected,
-    deselectAllSub,
     duplicateSelected,
     exportObj,
     importMeshFromFile,
@@ -25,7 +24,7 @@
     mirrorSelected,
     projectSelectedUv,
     saveSceneToFile,
-    selectAllSub,
+    toggleSelectAll,
     setEditMode,
     setGizmoMode,
     setShading,
@@ -51,7 +50,7 @@
     parseUvAction,
     parseViewLayoutAction,
   } from '../cad/shortcuts'
-  import { setViewportLayoutMode, toggleViewportMaximize } from '../cad/viewportLayout.svelte'
+  import { applyViewportLayoutMode, toggleViewportMaximize } from '../cad/viewportLayout.svelte'
   import { toggleSidebars } from '../cad/uiLayout.svelte'
 
   function onKeydown(e: KeyboardEvent) {
@@ -169,7 +168,7 @@
     const layoutMode = parseViewLayoutAction(action)
     if (layoutMode) {
       e.preventDefault()
-      setViewportLayoutMode(layoutMode)
+      applyViewportLayoutMode(layoutMode, cadState.activeViewport)
       return
     }
 
@@ -190,13 +189,9 @@
         e.preventDefault()
         duplicateSelected()
         break
-      case 'selectAll':
+      case 'selectToggleAll':
         e.preventDefault()
-        selectAllSub()
-        break
-      case 'deselectAll':
-        e.preventDefault()
-        deselectAllSub()
+        toggleSelectAll()
         break
       case 'selectGrow':
         e.preventDefault()

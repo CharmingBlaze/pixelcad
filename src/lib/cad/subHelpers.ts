@@ -51,28 +51,14 @@ export function rebuildSubHelpers() {
   const idx = geo.index
   if (!pos) return
 
-  if (cadState.editMode === 'vertex') {
-    const drawingPoly = cadState.activeTool === 'drawpoly'
-    const complexity = geometryComplexity(geo)
-    const stride = drawingPoly ? 1 : helperStride(complexity.vertices, EDIT_HELPER_LIMITS.vertices)
-    const seen = new Set<string>()
-    for (let i = 0; i < pos.count; i++) {
-      const selected = cadState.selVerts.has(i)
-      const hovered = cadState.hoverVert === i
-      if (!drawingPoly && !selected && !hovered && i % stride !== 0) continue
-      const key = `${pos.getX(i).toFixed(3)},${pos.getY(i).toFixed(3)},${pos.getZ(i).toFixed(3)}`
-      if (seen.has(key)) continue
-      seen.add(key)
-      const state = visualState(selected, hovered)
-      const p = new Vector3(pos.getX(i), pos.getY(i), pos.getZ(i))
-      const handle = vertexSprite(state)
-      handle.position.copy(p)
-      handle.userData.vertIdx = i
-      handle.renderOrder = 30
-      mesh.add(handle)
-      helpers.push(handle)
-    }
-  } else if (cadState.editMode === 'edge' && idx) {
+  const drawingPoly = cadState.activeTool === 'drawpoly'
+
+  if (drawingPoly || cadState.editMode === 'vertex') {
+    rebuildVertexHelpers(mesh, pos, drawingPoly)
+    return
+  }
+
+  if (cadState.editMode === 'edge' && idx) {
     const edges = selectableEdges(mesh)
     const stride = helperStride(edges.length, EDIT_HELPER_LIMITS.edges)
     for (let i = 0; i < edges.length; i++) {
@@ -200,6 +186,32 @@ function visualState(selected: boolean, hovered: boolean): SelectionVisualState 
   if (selected) return 'selected'
   if (hovered) return 'hover'
   return 'normal'
+}
+
+function rebuildVertexHelpers(
+  mesh: Mesh,
+  pos: NonNullable<Mesh['geometry']['attributes']['position']>,
+  showAll: boolean,
+) {
+  const complexity = geometryComplexity(mesh.geometry)
+  const stride = showAll ? 1 : helperStride(complexity.vertices, EDIT_HELPER_LIMITS.vertices)
+  const seen = new Set<string>()
+  for (let i = 0; i < pos.count; i++) {
+    const selected = cadState.selVerts.has(i)
+    const hovered = cadState.hoverVert === i
+    if (!showAll && !selected && !hovered && i % stride !== 0) continue
+    const key = `${pos.getX(i).toFixed(3)},${pos.getY(i).toFixed(3)},${pos.getZ(i).toFixed(3)}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    const state = visualState(selected, hovered)
+    const p = new Vector3(pos.getX(i), pos.getY(i), pos.getZ(i))
+    const handle = vertexSprite(state)
+    handle.position.copy(p)
+    handle.userData.vertIdx = i
+    handle.renderOrder = 30
+    mesh.add(handle)
+    helpers.push(handle)
+  }
 }
 
 function vertexSprite(state: SelectionVisualState): Sprite {

@@ -18,6 +18,7 @@ import {
   selectObject,
   setSubHover,
 } from './cadState.svelte'
+import { findCadObjectBySceneNode } from './referenceImage'
 import { edgeId, selectableEdges } from './selectionGeometry'
 
 const raycaster = new Raycaster()
@@ -40,13 +41,19 @@ export function pickAt(
   subHelpers: Object3D[],
   additive = false,
 ) {
+  if (cadState.activeTool === 'drawpoly') return
+
   raycastAt(camera, vpElement, clientX, clientY)
 
   if (cadState.editMode === 'object') {
-    const hits = raycaster.intersectObjects(meshes, false)
+    const pickableMeshes = meshes.filter((mesh) => {
+      const obj = findCadObjectBySceneNode(cadState.objects, mesh)
+      return obj && obj.node.visible && !obj.node.locked
+    })
+    const hits = raycaster.intersectObjects(pickableMeshes, false)
     if (hits.length > 0) {
       const hit = hits[0].object
-      const obj = cadState.objects.find((o) => o.mesh === hit)
+      const obj = findCadObjectBySceneNode(cadState.objects, hit)
       selectObject(obj?.id ?? null)
     } else {
       selectObject(null)
@@ -69,6 +76,10 @@ export function hoverAt(
   clientY: number,
   subHelpers: Object3D[],
 ) {
+  if (cadState.activeTool === 'drawpoly') {
+    clearSubHover()
+    return
+  }
   if (cadState.editMode === 'object') {
     clearSubHover()
     return

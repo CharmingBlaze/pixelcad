@@ -13,6 +13,11 @@ export const VIEWPORT_CONFIGS: ViewportConfig[] = [
   { id: 'side', label: 'SIDE', ortho: true, eye: [20, 0, 0], up: [0, 1, 0] },
 ]
 
+export const TOP_VP_INDEX = 0
+export const PERSP_VP_INDEX = 1
+export const FRONT_VP_INDEX = 2
+export const SIDE_VP_INDEX = 3
+
 export function createCamera(config: ViewportConfig): Camera {
   if (config.ortho) {
     const cam = new OrthographicCamera(-8, 8, 8, -8, 0.01, 200)

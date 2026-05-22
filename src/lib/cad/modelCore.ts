@@ -1,5 +1,6 @@
 import type { BufferGeometry, Mesh } from 'three'
 import { DEFAULT_MATERIAL_ID } from './materials'
+import { getReferenceImagePlane, isReferenceImageRoot } from './referenceImage'
 import type { CadObject, GeometryStats, PrimitiveType, SceneNode, UvChannel } from './types'
 
 export function createSceneNode(id: string, name: string): SceneNode {
@@ -68,7 +69,8 @@ export function createCadObject(args: {
 export function syncObjectMetadata(obj: CadObject): CadObject {
   obj.node.name = obj.name
   obj.node.visible = obj.mesh.visible
-  obj.stats = geometryStats(obj.mesh.geometry)
+  const plane = isReferenceImageRoot(obj.mesh) ? getReferenceImagePlane(obj.mesh) : null
+  obj.stats = plane ? geometryStats(plane.geometry) : geometryStats(obj.mesh.geometry)
   const userData = obj.mesh.userData
   obj.mesh.userData = {
     ...userData,
@@ -81,6 +83,10 @@ export function syncObjectMetadata(obj: CadObject): CadObject {
     uvImageUrl: userData.uvImageUrl,
     uvImageName: userData.uvImageName,
     uvTexture: userData.uvTexture,
+    referenceImageUrl: userData.referenceImageUrl,
+    referenceImageName: userData.referenceImageName,
+    referenceTexture: userData.referenceTexture,
+    isReferenceImage: userData.isReferenceImage,
     uvIslandSnapshots: userData.uvIslandSnapshots,
     uvInitializedIslands: userData.uvInitializedIslands,
     uvIslandSlotCount: userData.uvIslandSlotCount,

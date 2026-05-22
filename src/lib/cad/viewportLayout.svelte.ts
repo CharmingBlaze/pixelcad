@@ -1,7 +1,14 @@
 export type ViewportLayoutMode = 'quad' | 'single' | 'splitVertical' | 'splitHorizontal' | 'uvEditor'
 
+import { PERSP_VP_INDEX, SIDE_VP_INDEX } from './viewports'
+
 const MIN_SPLIT = 0.18
 const MAX_SPLIT = 0.82
+
+function fallbackSecondaryViewport(primary: number): number {
+  if (primary !== PERSP_VP_INDEX) return PERSP_VP_INDEX
+  return 0
+}
 
 export const viewportLayout = $state({
   mode: 'quad' as ViewportLayoutMode,
@@ -22,6 +29,15 @@ export function setViewportLayoutMode(mode: ViewportLayoutMode) {
   viewportLayout.mode = mode
 }
 
+export function applyViewportLayoutMode(mode: ViewportLayoutMode, activeViewport: number) {
+  if (mode === 'splitVertical') {
+    setSecondaryViewport(SIDE_VP_INDEX)
+  } else if (mode !== 'quad') {
+    setSecondaryViewport(fallbackSecondaryViewport(activeViewport))
+  }
+  setViewportLayoutMode(mode)
+}
+
 export function toggleViewportMaximize() {
   if (viewportLayout.mode === 'single') {
     viewportLayout.mode = viewportLayout.returnMode === 'single' ? 'quad' : viewportLayout.returnMode
@@ -29,6 +45,16 @@ export function toggleViewportMaximize() {
     viewportLayout.returnMode = viewportLayout.mode
     viewportLayout.mode = 'single'
   }
+}
+
+export function toggleUvEditor() {
+  if (viewportLayout.mode === 'uvEditor') {
+    viewportLayout.mode = viewportLayout.returnMode === 'uvEditor' ? 'quad' : viewportLayout.returnMode
+    return
+  }
+
+  viewportLayout.returnMode = viewportLayout.mode
+  viewportLayout.mode = 'uvEditor'
 }
 
 export function setSecondaryViewport(index: number) {

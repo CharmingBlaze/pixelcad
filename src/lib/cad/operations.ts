@@ -695,7 +695,7 @@ function replaceGeometry(mesh: Mesh, positions: number[], indices: number[]) {
   addWireEdges(mesh)
 }
 
-const MERGE_WELD_EPSILON = 0.015
+const MERGE_WELD_EPSILON = 0.05
 
 export function mergePolygonIntoMesh(
   mesh: Mesh,
@@ -703,6 +703,7 @@ export function mergePolygonIntoMesh(
   indices: number[],
   weldEpsilon = MERGE_WELD_EPSILON,
 ): boolean {
+  if (!mesh.geometry?.attributes?.position) return false
   const pos = mesh.geometry.attributes.position
   if (!pos || worldVertices.length < 3 || indices.length < 3) return false
 

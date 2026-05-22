@@ -1,6 +1,7 @@
 import {
   BufferGeometry,
   Float32BufferAttribute,
+  PlaneGeometry,
   Vector3,
 } from 'three'
 import type { PolyDrawSpace, PrimitiveType } from './types'
@@ -308,6 +309,8 @@ export function geoForType(type: PrimitiveType): BufferGeometry {
       return lowPolyPlane()
     case 'polygon':
       return lowPolyPlane()
+    case 'referenceImage':
+      return new PlaneGeometry(1, 1)
     default:
       return lowPolyCube()
   }

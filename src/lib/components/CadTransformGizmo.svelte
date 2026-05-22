@@ -8,6 +8,7 @@
     PerspectiveCamera,
     Quaternion,
     Vector3,
+    type Mesh,
     type Scene,
   } from 'three'
   import { onMount } from 'svelte'
@@ -16,10 +17,13 @@
   import { addWireEdges } from '../cad/operations'
   import {
     applyWorldMatrixToVertexSnapshot,
+    meshBoundsCenterLocal,
     selectedVertexIndices,
     selectionCenterWorld,
   } from '../cad/selectionGeometry'
   import { rebuildSubHelpers } from '../cad/subHelpers'
+  import { applyTransformGizmoColors } from '../cad/gizmoTheme'
+  import { isReferenceImage, syncReferenceImageMaterial } from '../cad/referenceImage'
   import type { ViewportRuntime } from '../cad/viewportRuntime'
 
   let {
@@ -49,8 +53,12 @@
   let subObjectPivot: Object3D | undefined
   let subObjectVertices = new Set<number>()
   let dragStartPivotWorld = new Matrix4()
+  let pivotToMeshOffset = new Matrix4()
   let dragOriginalPositions = new Map<number, Vector3>()
+  let dragStartMeshScale = new Vector3(1, 1, 1)
+  let dragStartMeshPosition = new Vector3()
   let applyingSubObject = false
+  let applyingObjectTransform = false
 
   type TransformDomAdapter = HTMLElement & {
     setCurrentViewport: (vp: ViewportRuntime) => void
@@ -157,9 +165,22 @@
     prepareViewport(getActiveViewport())
   }
 
+  function syncTransformPivotFromMesh(mesh: Mesh) {
+    if (!subObjectPivot) return
+    const worldCenter = mesh.localToWorld(meshBoundsCenterLocal(mesh).clone())
+    subObjectPivot.position.copy(worldCenter)
+    subObjectPivot.quaternion.copy(
+      cadState.transformSpace === 'local'
+        ? mesh.getWorldQuaternion(new Quaternion())
+        : new Quaternion(),
+    )
+    subObjectPivot.scale.set(1, 1, 1)
+    subObjectPivot.updateMatrixWorld(true)
+  }
+
   function syncAttachment() {
     if (!controls) return
-    if (controls.dragging && cadState.editMode !== 'object') return
+    if (controls.dragging) return
     const selected = getSelected()
     const showObject = cadState.editMode === 'object' && cadState.activeTool === 'select' && !!selected?.mesh
     const showSubObject =
@@ -167,7 +188,9 @@
     controls.space = cadState.transformSpace
 
     if (showObject && selected) {
-      controls.attach(selected.mesh)
+      selected.mesh.updateMatrixWorld(true)
+      syncTransformPivotFromMesh(selected.mesh)
+      controls.attach(subObjectPivot!)
       controls.mode = cadState.gizmoMode
       controls.enabled = true
     } else if (showSubObject && selected && subObjectPivot) {
@@ -204,7 +227,7 @@
 
   function refreshDragHelpers(selected = getSelected()) {
     if (!selected) return
-    addWireEdges(selected.mesh)
+    if (!isReferenceImage(selected)) addWireEdges(selected.mesh)
     rebuildSubHelpers()
   }
 
@@ -220,16 +243,54 @@
     domAdapter.setCurrentViewport(vp)
     scene.add(subObjectPivot)
     scene.add(controls.getHelper())
+    applyTransformGizmoColors(controls)
     onReady({ prepareViewport, setVisible: setControlsVisible, isActive: isTransformActive })
 
     controls.addEventListener('change', () => {
-      if (applyingSubObject || !controls?.dragging || cadState.editMode === 'object') {
+      if (applyingSubObject || applyingObjectTransform || !controls?.dragging) {
         cadState.revision++
         return
       }
 
       const selected = getSelected()
-      if (!selected || !subObjectPivot || subObjectVertices.size === 0) {
+      if (!selected || !subObjectPivot) {
+        cadState.revision++
+        return
+      }
+
+      if (cadState.editMode === 'object') {
+        applyingObjectTransform = true
+        if (selected && isReferenceImage(selected)) {
+          if (cadState.gizmoMode === 'translate') {
+            selected.mesh.position.copy(subObjectPivot.position)
+          } else if (cadState.gizmoMode === 'scale') {
+            selected.mesh.position.copy(subObjectPivot.position)
+            selected.mesh.scale.set(
+              dragStartMeshScale.x * subObjectPivot.scale.x,
+              dragStartMeshScale.y * subObjectPivot.scale.y,
+              dragStartMeshScale.z * subObjectPivot.scale.z,
+            )
+          }
+        } else {
+          selected.mesh.matrix.copy(subObjectPivot.matrixWorld).multiply(pivotToMeshOffset)
+          selected.mesh.matrix.decompose(
+            selected.mesh.position,
+            selected.mesh.quaternion,
+            selected.mesh.scale,
+          )
+        }
+        selected.mesh.updateMatrixWorld(true)
+        if (isReferenceImage(selected)) {
+          syncReferenceImageMaterial(selected.mesh, true)
+        } else {
+          refreshDragHelpers(selected)
+        }
+        applyingObjectTransform = false
+        cadState.revision++
+        return
+      }
+
+      if (subObjectVertices.size === 0) {
         cadState.revision++
         return
       }
@@ -251,23 +312,35 @@
       dragViewport = currentViewport
       const selected = getSelected()
       dragOriginalPositions = new Map()
-      if (selected && subObjectPivot && cadState.editMode !== 'object') {
-        subObjectVertices = selectedVertexIndices(
-          selected.mesh,
-          cadState.editMode,
-          cadState.selVerts,
-          cadState.selEdges,
-          cadState.selFaces,
-        )
-        const pos = selected.mesh.geometry.attributes.position
-        subObjectVertices.forEach((index) => {
-          dragOriginalPositions.set(
-            index,
-            new Vector3(pos.getX(index), pos.getY(index), pos.getZ(index)),
-          )
-        })
+      if (selected && subObjectPivot) {
         subObjectPivot.updateMatrixWorld(true)
-        dragStartPivotWorld.copy(subObjectPivot.matrixWorld)
+        if (cadState.editMode === 'object') {
+          selected.mesh.updateMatrixWorld(true)
+          if (isReferenceImage(selected)) {
+            dragStartMeshScale.copy(selected.mesh.scale)
+            dragStartMeshPosition.copy(selected.mesh.position)
+          } else {
+            pivotToMeshOffset.copy(selected.mesh.matrixWorld).premultiply(
+              subObjectPivot.matrixWorld.clone().invert(),
+            )
+          }
+        } else {
+          subObjectVertices = selectedVertexIndices(
+            selected.mesh,
+            cadState.editMode,
+            cadState.selVerts,
+            cadState.selEdges,
+            cadState.selFaces,
+          )
+          const pos = selected.mesh.geometry.attributes.position
+          subObjectVertices.forEach((index) => {
+            dragOriginalPositions.set(
+              index,
+              new Vector3(pos.getX(index), pos.getY(index), pos.getZ(index)),
+            )
+          })
+          dragStartPivotWorld.copy(subObjectPivot.matrixWorld)
+        }
       }
       onDraggingChange(true)
       if (!historyStarted) {
@@ -278,7 +351,14 @@
 
     controls.addEventListener('mouseUp', () => {
       const selected = getSelected()
-      if (selected && cadState.editMode !== 'object') refreshObject(selected)
+      if (selected) {
+        if (isReferenceImage(selected)) {
+          syncReferenceImageMaterial(selected.mesh, true)
+          cadState.revision++
+        } else {
+          refreshObject(selected)
+        }
+      }
       onDraggingChange(false)
       historyStarted = false
       dragViewport = undefined

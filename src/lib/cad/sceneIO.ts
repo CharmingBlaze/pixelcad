@@ -1,9 +1,15 @@
-import { BufferGeometry, Float32BufferAttribute, Mesh } from 'three'
+import {
+  BufferGeometry,
+  Float32BufferAttribute,
+  Group,
+  Mesh,
+} from 'three'
 import type { Scene } from 'three'
 import { geoForType } from './geometry'
 import { DEFAULT_MATERIAL_ID, matDefault, cloneMaterialLibrary } from './materials'
 import { addWireEdges } from './operations'
 import { createCadObject, createSceneNode, syncObjectMetadata } from './modelCore'
+import { createReferenceImageRoot } from './referenceImage'
 import type { CadMaterial, CadObject, PrimitiveType, SceneNode, UvChannel } from './types'
 
 const SCENE_VERSION = 1
@@ -26,6 +32,10 @@ interface SerializedObject {
   uvChannels?: UvChannel[]
   uvImageUrl?: string
   uvImageName?: string
+  referenceImageUrl?: string
+  referenceImageName?: string
+  visible?: boolean
+  locked?: boolean
   geometry: SerializedGeometry
 }
 
@@ -100,6 +110,10 @@ export function serializeScene(
       uvChannels: o.uvChannels,
       uvImageUrl: o.mesh.userData.uvImageUrl as string | undefined,
       uvImageName: o.mesh.userData.uvImageName as string | undefined,
+      referenceImageUrl: o.mesh.userData.referenceImageUrl as string | undefined,
+      referenceImageName: o.mesh.userData.referenceImageName as string | undefined,
+      visible: o.node.visible,
+      locked: o.node.locked,
       position: o.mesh.position.toArray() as [number, number, number],
       rotation: [o.mesh.rotation.x, o.mesh.rotation.y, o.mesh.rotation.z],
       scale: o.mesh.scale.toArray() as [number, number, number],
@@ -130,33 +144,61 @@ export function deserializeScene(
         ? deserializeGeometry(item.geometry)
         : geoForType(item.type)
 
-    const mesh = new Mesh(geo, matDefault())
-    mesh.position.fromArray(item.position)
-    mesh.rotation.set(item.rotation[0], item.rotation[1], item.rotation[2])
-    mesh.scale.fromArray(item.scale)
-    mesh.userData = {
-      type: item.type,
-      name: item.name,
-      outline: null,
-      wireEdges: null,
-      materialId: item.materialId ?? DEFAULT_MATERIAL_ID,
-      uvImageUrl: item.uvImageUrl,
-      uvImageName: item.uvImageName,
+    let sceneNode: Mesh | Group
+    if (item.type === 'referenceImage') {
+      const plane = new Mesh(geo, matDefault())
+      sceneNode = createReferenceImageRoot(
+        plane,
+        { x: item.position[0], y: item.position[1], z: item.position[2] },
+        {
+          type: item.type,
+          name: item.name,
+          isReferenceImage: true,
+          outline: null,
+          wireEdges: null,
+          materialId: item.materialId ?? DEFAULT_MATERIAL_ID,
+          uvImageUrl: item.uvImageUrl,
+          uvImageName: item.uvImageName,
+          referenceImageUrl: item.referenceImageUrl,
+          referenceImageName: item.referenceImageName,
+        },
+      )
+      sceneNode.scale.fromArray(item.scale)
+    } else {
+      const mesh = new Mesh(geo, matDefault())
+      mesh.position.fromArray(item.position)
+      mesh.rotation.set(item.rotation[0], item.rotation[1], item.rotation[2])
+      mesh.scale.fromArray(item.scale)
+      mesh.userData = {
+        type: item.type,
+        name: item.name,
+        outline: null,
+        wireEdges: null,
+        materialId: item.materialId ?? DEFAULT_MATERIAL_ID,
+        uvImageUrl: item.uvImageUrl,
+        uvImageName: item.uvImageName,
+      }
+      addWireEdges(mesh)
+      sceneNode = mesh
     }
-    addWireEdges(mesh)
-    scene.add(mesh)
+    scene.add(sceneNode)
 
     const match = item.name.match(/\.(\d+)$/)
     if (match) counter = Math.max(counter, parseInt(match[1], 10))
 
     const obj = createCadObject({
       id: item.id ?? crypto.randomUUID(),
-      mesh,
+      mesh: sceneNode as Mesh,
       type: item.type,
       name: item.name,
       materialId: item.materialId ?? DEFAULT_MATERIAL_ID,
     })
     obj.node.parentId = item.parentId ?? null
+    if (item.visible !== undefined) {
+      obj.node.visible = item.visible
+      obj.mesh.visible = item.visible
+    }
+    if (item.locked !== undefined) obj.node.locked = item.locked
     if (item.uvChannels?.length) obj.uvChannels = item.uvChannels
     objects.push(syncObjectMetadata(obj))
   }

@@ -1,10 +1,12 @@
 import {
   Matrix4,
+  Mesh,
   Vector3,
   type BufferAttribute,
-  type Mesh,
+  type Object3D,
 } from 'three'
 import type { EditMode } from './types'
+import { getReferenceImagePlane, isReferenceImageRoot } from './referenceImage'
 
 export interface SelectableEdge {
   id: string
@@ -157,6 +159,15 @@ function faceNormal(pos: BufferAttribute, a: number, b: number, c: number): Vect
   const vb = new Vector3(pos.getX(b), pos.getY(b), pos.getZ(b))
   const vc = new Vector3(pos.getX(c), pos.getY(c), pos.getZ(c))
   return vb.sub(va).cross(vc.sub(va)).normalize()
+}
+
+export function meshBoundsCenterLocal(mesh: Mesh | Object3D): Vector3 {
+  const target = isReferenceImageRoot(mesh) ? getReferenceImagePlane(mesh) ?? mesh : mesh
+  if (!(target instanceof Mesh)) return new Vector3()
+  target.geometry.computeBoundingBox()
+  const box = target.geometry.boundingBox
+  if (!box) return new Vector3()
+  return box.getCenter(new Vector3())
 }
 
 export function selectionCenterLocal(mesh: Mesh, vertices: Set<number>): Vector3 | null {
